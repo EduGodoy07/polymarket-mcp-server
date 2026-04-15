@@ -7,7 +7,7 @@
 
 **Complete AI-Powered Trading Platform for Polymarket Prediction Markets**
 
-Enable Claude to autonomously trade, analyze, and manage positions on Polymarket with 45 comprehensive tools, real-time WebSocket monitoring, and enterprise-grade safety features.
+Enable Claude to autonomously trade, analyze, and manage positions on Polymarket with **53 comprehensive tools**, real-time WebSocket monitoring, enterprise-grade safety features, and a full autonomous trading engine with backtesting.
 
 ---
 
@@ -26,15 +26,16 @@ Powered by **[Claude Code](https://claude.ai/code)** from Anthropic
 
 ## ⭐ Key Features
 
-### 🎯 45 Comprehensive Tools Across 5 Categories
+### 🎯 53 Comprehensive Tools Across 6 Categories
 
 <table>
 <tr>
-<td width="20%" align="center"><b>🔍<br/>Market Discovery</b><br/>8 tools</td>
-<td width="20%" align="center"><b>📊<br/>Market Analysis</b><br/>10 tools</td>
-<td width="20%" align="center"><b>💼<br/>Trading</b><br/>12 tools</td>
-<td width="20%" align="center"><b>📈<br/>Portfolio</b><br/>8 tools</td>
-<td width="20%" align="center"><b>⚡<br/>Real-time</b><br/>7 tools</td>
+<td width="16%" align="center"><b>🔍<br/>Market Discovery</b><br/>8 tools</td>
+<td width="16%" align="center"><b>📊<br/>Market Analysis</b><br/>10 tools</td>
+<td width="16%" align="center"><b>💼<br/>Trading</b><br/>12 tools</td>
+<td width="16%" align="center"><b>📈<br/>Portfolio</b><br/>8 tools</td>
+<td width="16%" align="center"><b>⚡<br/>Real-time</b><br/>7 tools</td>
+<td width="16%" align="center"><b>🤖<br/>Trading Engine</b><br/>8 tools</td>
 </tr>
 </table>
 
@@ -89,6 +90,16 @@ Powered by **[Claude Code](https://claude.ai/code)** from Anthropic
 - Subscription management
 - System health monitoring
 - Auto-reconnect with exponential backoff
+
+#### 🤖 Autonomous Trading Engine (8 tools) — NEW in v0.2.0
+- **`start_engine`** — Launch autonomous 5-minute BTC market trading (paper or live)
+- **`stop_engine`** — Graceful shutdown with session summary
+- **`engine_status`** — Active slots, strategy, cumulative PnL
+- **`engine_pnl_history`** — Per-slot PnL breakdown
+- **`paper_wallet_status`** — Simulated balance, positions, fees
+- **`generate_charts`** — Interactive HTML charts from trade logs (Plotly)
+- **`price_feed_status`** — Multi-source BTC prices + divergence signals
+- **`run_backtest`** — Backtest any strategy on historical Binance OHLCV data
 
 ### 🛡️ Enterprise-Grade Safety & Risk Management
 
@@ -282,7 +293,8 @@ Add to your Claude Desktop configuration file:
 - **[Demo Video Script](DEMO_VIDEO_SCRIPT.md)** - Video tutorial scripts
 
 ### Developer Resources
-- **[Tools Reference](TOOLS_REFERENCE.md)** - Complete API documentation for all 45 tools
+- **[Tools Reference](TOOLS_REFERENCE.md)** - Complete API documentation for all 53 tools
+- **[Engine Guide](ENGINE_GUIDE.md)** - Autonomous trading engine: strategy authoring, backtesting, live trading
 - **[Agent Integration Guide](AGENT_INTEGRATION_GUIDE.md)** - How to integrate with your agents
 - **[Trading Architecture](TRADING_ARCHITECTURE.md)** - System design and architecture
 - **[WebSocket Integration](WEBSOCKET_INTEGRATION.md)** - Real-time data setup
@@ -384,6 +396,80 @@ Ask Claude:
 "Show me real-time orderbook updates for [token_id]"
 ```
 
+### Autonomous Trading Engine
+```
+"Backtest the orderbook_spread strategy on the last 30 days of BTC data"
+"Start the trading engine in simulation mode with $20 per slot"
+"What's the engine status and current PnL?"
+"Show me my paper wallet balance and open positions"
+"Generate charts for this trading session"
+"What's the current BTC price divergence between Binance and Coinbase?"
+```
+
+---
+
+## 🤖 Trading Engine Architecture
+
+The engine implements the "early-bird" pattern from the article [Building a Polymarket BTC Trading Engine with Claude](https://github.com/KaustubhPatange/polymarket-trade-engine): subscribe to the **next** 5-minute slot before it opens, so the strategy is ready the moment the window begins.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Trading Engine (v0.2.0)                   │
+└─────────────────────────────────────────────────────────────┘
+
+  Workflow: Backtest → Paper Wallet → Live
+
+  1. run_backtest          ← validate strategy on historical data
+         │
+         ▼ (win rate > 52%, Sharpe > 1.0)
+  2. start_engine sim=true ← paper wallet, real market data
+         │
+         ▼ (profitable over 50+ slots)
+  3. start_engine sim=false ← live USDC on real markets
+
+┌──────────────────────────────────────────────────────────────┐
+│                    engine/ module                            │
+├─────────────────┬────────────────────────────────────────────┤
+│  strategy.py    │  BaseStrategy + StrategyAPI (write here)  │
+│  lifecycle.py   │  MarketSlot: WAITING → RUNNING → DONE     │
+│  engine.py      │  TradingEngine orchestrator               │
+│  simulator.py   │  PaperWallet — fills, settlement delay    │
+│  position_mgr   │  Stop-loss + take-profit monitor          │
+│  price_feeds.py │  Binance + Coinbase + Chainlink WebSocket │
+│  indicators.py  │  RSI, ATR, Bollinger, signal_strength     │
+│  pnl_logger.py  │  JSONL logs + Plotly HTML charts          │
+│  backtester.py  │  Historical OHLCV backtest engine         │
+│  strategies.py  │  orderbook_spread, divergence_scalp       │
+└─────────────────┴────────────────────────────────────────────┘
+```
+
+### Writing a Custom Strategy
+
+```python
+from polymarket_mcp.engine import BaseStrategy, StrategyAPI, Side
+from polymarket_mcp.engine import indicators
+
+class MyStrategy(BaseStrategy):
+    name = "my_strategy"
+
+    async def run(self, api: StrategyAPI) -> None:
+        # Collect price data
+        prices = [await api.price() for _ in range(15)]
+
+        # Compute RSI
+        rsi = indicators.rsi(prices, period=10)
+        ob = await api.orderbook()
+
+        # Entry signal
+        if rsi and rsi < 35 and ob.spread < 0.02:
+            receipt = await api.buy(Side.YES, size_usd=15.0)
+            if receipt.is_filled:
+                api.set_stop_loss(receipt.price * 0.92)
+                api.set_take_profit(receipt.price * 1.15)
+```
+
+See [ENGINE_GUIDE.md](ENGINE_GUIDE.md) for the complete strategy authoring guide.
+
 ---
 
 ## 🧪 Testing
@@ -457,8 +543,8 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on:
 
 ## 📊 Project Stats
 
-- **Lines of Code**: ~10,000+ (Python)
-- **Tools**: 45 comprehensive tools
+- **Lines of Code**: ~14,000+ (Python)
+- **Tools**: 53 comprehensive tools
 - **Test Coverage**: High (real API integration)
 - **Documentation**: Comprehensive (multiple guides)
 - **Dependencies**: Modern Python packages (MCP, httpx, websockets, eth-account)
@@ -533,22 +619,31 @@ The authors and contributors are not responsible for any financial losses incurr
 
 ## 📈 Roadmap
 
-### Current Version (v0.1.0)
+### v0.2.0 — Trading Engine (Current)
+- ✅ 53 comprehensive tools (+8 engine tools)
+- ✅ Autonomous 5-minute BTC market engine
+- ✅ Paper wallet / simulation mode
+- ✅ Multi-source price feeds (Binance + Coinbase + Chainlink)
+- ✅ Stop-loss + take-profit position manager
+- ✅ RSI, ATR, Bollinger, signal_strength indicators
+- ✅ JSONL trade logging + interactive Plotly charts
+- ✅ Historical backtesting (Binance OHLCV, no auth)
+- ✅ Pluggable strategy pattern
+
+### v0.1.0 — Foundation
 - ✅ 45 comprehensive tools
 - ✅ Real-time WebSocket monitoring
 - ✅ Safety limits and risk management
 - ✅ Complete test suite
 - ✅ Comprehensive documentation
 
-### Planned Features
+### Planned (v0.3.0)
 - [ ] CI/CD pipeline (GitHub Actions)
-- [ ] Enhanced AI analysis tools
-- [ ] Portfolio strategy templates
-- [ ] Market alerts and notifications
+- [ ] Walk-forward optimization for strategies
+- [ ] Time-window filtering (only trade during edge windows)
+- [ ] Multi-asset engine (ETH, SOL, XRP 5m markets)
+- [ ] Telegram/Discord trade alerts
 - [ ] Performance analytics dashboard
-- [ ] Multi-wallet support
-- [ ] Advanced order types
-- [ ] Historical backtesting
 
 ---
 

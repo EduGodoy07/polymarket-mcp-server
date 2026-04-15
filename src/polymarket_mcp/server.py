@@ -20,7 +20,8 @@ from .tools import (
     TradingTools,
     get_tool_definitions,
     portfolio_integration,
-    realtime
+    realtime,
+    engine_tools
 )
 
 # Configure logging
@@ -72,6 +73,9 @@ async def list_tools() -> list[types.Tool]:
 
     # Real-time tools (partial functionality without auth)
     tools.extend(realtime.get_tools())
+
+    # Engine tools (always available — engine starts in simulation by default)
+    tools.extend(engine_tools.get_tools())
 
     return tools
 
@@ -210,6 +214,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
                 safety_limits,
                 config
             )
+
+        # Route to engine tools
+        elif name in ["start_engine", "stop_engine", "engine_status", "engine_pnl_history",
+                      "paper_wallet_status", "generate_charts", "price_feed_status",
+                      "run_backtest"]:
+            return await engine_tools.handle_tool_call(name, arguments)
 
         # Route to real-time websocket tools
         elif name in ["subscribe_market_prices", "subscribe_orderbook_updates", "subscribe_user_orders",
@@ -355,6 +365,9 @@ async def initialize_server() -> None:
         # Connect WebSocket (non-blocking)
         asyncio.create_task(websocket_manager.connect())
         logger.info("WebSocket manager initialized with 7 real-time tools")
+
+        # Wire client into engine tools
+        engine_tools.set_client(polymarket_client)
 
         logger.info("Server initialization complete!")
         logger.info(f"Connected to Polymarket on chain ID {config.POLYMARKET_CHAIN_ID}")

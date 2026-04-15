@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-04-15
+
+### 🤖 Autonomous Trading Engine
+
+Major new module: `src/polymarket_mcp/engine/` — a complete autonomous trading engine for Polymarket 5-minute BTC prediction markets, implementing the "early-bird" lifecycle pattern.
+
+#### Added — Engine Core
+- **`engine/strategy.py`** — `BaseStrategy` abstract class + `StrategyAPI` injectable interface. Write strategies by subclassing `BaseStrategy` and implementing `run(api)`. API provides `buy()`, `sell()`, `orderbook()`, `price()`, `position()`, `set_stop_loss()`, `set_take_profit()`.
+- **`engine/lifecycle.py`** — `MarketSlot` with `WAITING → RUNNING → COMPLETED` lifecycle. Slots are created in advance (early-bird) and execute exactly one strategy per 5-minute window. Includes `SlotPnL` dataclass with realized/resolved PnL tracking.
+- **`engine/engine.py`** — `TradingEngine` orchestrator. Discovers upcoming BTC 5-minute markets via Gamma API, launches slots as asyncio tasks, aggregates PnL, supports concurrent slot limits.
+
+#### Added — Simulation
+- **`engine/simulator.py`** — `PaperWallet` for zero-risk strategy testing. Simulates: limit order fills vs real orderbook liquidity, Polygon on-chain settlement delay (12s), partial fills for thin books, FOK all-or-nothing semantics, taker fee (0.5%).
+
+#### Added — Risk Management
+- **`engine/position_manager.py`** — `PositionManager` background monitor. Polls open slot prices every 2s, triggers `on_stop_loss_hit` / `on_take_profit_hit` hooks on strategy, records `RiskEvent` objects.
+
+#### Added — Price Feeds
+- **`engine/price_feeds.py`** — `MultiSourcePriceFeed`. Connects simultaneously to Binance WebSocket trade stream, Coinbase Advanced Trade WebSocket, and Chainlink BTC/USD aggregator on Polygon (via JSON-RPC). Detects cross-source price divergences as leading indicators. Divergence threshold configurable (default 0.1%).
+
+#### Added — Indicators
+- **`engine/indicators.py`** — Pure-Python (no pandas/numpy) technical indicators: `rsi()`, `atr()`, `ema()`, `vwap()`, `bollinger()`, `divergence_score()`. Includes `RollingRSI` and `RollingATR` for incremental updates. `signal_strength()` composite scorer combining RSI extremes, spread tightness, and cross-source divergence.
+
+#### Added — Logging & Charts
+- **`engine/pnl_logger.py`** — `PnLLogger`. Writes structured JSONL trade logs per session. `generate_charts()` produces self-contained interactive HTML charts (Plotly CDN) per slot showing buy/sell events. `generate_session_chart()` produces cumulative PnL curve with slot bar chart. Charts saved to `~/.polymarket_engine/logs/charts/`.
+
+#### Added — Backtesting
+- **`engine/backtester.py`** — `Backtester` + `fetch_candles()`. Downloads BTC/USDT 5m OHLCV from Binance public REST API (no auth). Maps each candle to a Polymarket slot (open = price_to_beat, YES wins if close > open). Runs strategy with `BacktestStrategyAPI` — synthetic orderbook from OHLC, deterministic price path simulation, stop-loss/take-profit enforcement. Computes: `win_rate`, `total_pnl`, `avg_pnl`, `max_drawdown`, `sharpe_ratio`, `profit_factor`, `best/worst_slot`.
+
+#### Added — Built-in Strategies
+- **`engine/strategies.py`** — Two reference strategies:
+  - `OrderbookSpreadStrategy` — enters when spread < 3% + RSI extreme (< 35 or > 65). Stop-loss -8%, take-profit +15%.
+  - `DivergenceScalpStrategy` — trades on cross-source Binance/Coinbase divergence > 0.1%. Stop-loss ±6%, take-profit ±12%.
+  - `register_strategy()` — register custom strategies by name.
+
+#### Added — MCP Tools (8 new tools)
+- **`start_engine`** — start autonomous engine (simulation or live)
+- **`stop_engine`** — graceful shutdown with session summary
+- **`engine_status`** — active slots, strategy, total PnL, paper balance
+- **`engine_pnl_history`** — per-slot PnL breakdown (paginated)
+- **`paper_wallet_status`** — balance, positions, fees, settlement state
+- **`generate_charts`** — produce HTML charts, returns file paths
+- **`price_feed_status`** — consensus BTC price + recent divergences
+- **`run_backtest`** — backtest strategy on historical Binance OHLCV with full metrics
+
+#### Changed
+- `server.py` — routes 8 new engine tool calls, wires `polymarket_client` into engine tools on init, tool count updated 45 → 53
+- `tools/__init__.py` — exports `engine_tools` module
+
+---
+
 ## [0.1.0] - 2025-01-10
 
 ### 🎉 Initial Public Release
