@@ -143,25 +143,32 @@ class BacktestResults:
         )
 
         wins = [s for s in traded if s.pnl > 0]
-        self.win_rate = len(wins) / len(traded) * 100 if traded else 0.0
+        # win_rate as fraction 0.0-1.0 (not ×100 — display layer handles formatting)
+        self.win_rate = len(wins) / len(traded) if traded else 0.0
 
-        # Max drawdown (on cumulative PnL curve)
+        # avg_pnl only over slots that actually traded
+        self.avg_pnl = self.total_pnl / len(traded) if traded else 0.0
+
+        # Max drawdown as fraction 0.0-1.0
         cumulative = []
         running = self.initial_capital
         peak = running
         max_dd = 0.0
         for pnl in pnls:
             running += pnl
+            if running <= 0:
+                running = 0.0
             peak = max(peak, running)
-            dd = (peak - running) / peak * 100
+            dd = (peak - running) / peak if peak > 0 else 0.0
             max_dd = max(max_dd, dd)
             cumulative.append(running)
         self.max_drawdown = max_dd
 
-        # Sharpe ratio (annualized, assuming ~288 five-min slots per day)
-        if len(pnls) > 1:
-            mean = sum(pnls) / len(pnls)
-            variance = sum((p - mean) ** 2 for p in pnls) / (len(pnls) - 1)
+        # Sharpe ratio — computed only on traded slots to avoid noise from idle slots
+        traded_pnls = [s.pnl for s in traded]
+        if len(traded_pnls) > 1:
+            mean = sum(traded_pnls) / len(traded_pnls)
+            variance = sum((p - mean) ** 2 for p in traded_pnls) / (len(traded_pnls) - 1)
             std = math.sqrt(variance) if variance > 0 else 0.0
             daily_slots = 288
             annualized_factor = math.sqrt(365 * daily_slots)
@@ -185,7 +192,7 @@ class BacktestResults:
             "final_capital": round(self.initial_capital + self.total_pnl, 4),
             "total_pnl": round(self.total_pnl, 4),
             "total_pnl_pct": round(self.total_pnl / self.initial_capital * 100, 2),
-            "win_rate": round(self.win_rate, 1),
+            "win_rate": round(self.win_rate, 4),
             "avg_pnl": round(self.avg_pnl, 4),
             "best_slot": round(self.best_slot, 4),
             "worst_slot": round(self.worst_slot, 4),
@@ -284,7 +291,7 @@ class BacktestStrategyAPI(StrategyAPI):
     from open→close with noise proportional to the high-low range.
     """
 
-    def __init__(self, candle: Candle, budget: float, slot):
+    def __init__(self, candle: Candle, budget: float, slot, history: List[Candle] = None):
         self._candle = candle
         self._budget = budget
         self._balance = budget
@@ -300,6 +307,12 @@ class BacktestStrategyAPI(StrategyAPI):
         self._sim_step = 0
         self._sim_prices = self._build_price_path()
         self.simulation = True
+        # Historical candles for warmup (EMA, ATR, Ichimoku, etc.)
+        self._history: List[Candle] = history or []
+        # Pre-computed historical price series (close prices, oldest first)
+        self.history_closes: List[float] = [c.close for c in self._history]
+        self.history_highs:  List[float] = [c.high  for c in self._history]
+        self.history_lows:   List[float] = [c.low   for c in self._history]
 
     def _build_price_path(self) -> List[float]:
         """
@@ -570,15 +583,20 @@ class Backtester:
             f"{interval} {symbol} candles..."
         )
 
+        # Warmup window — pass recent candle history into each slot
+        # so strategies that need EMA50/Ichimoku/SuperTrend have data
+        WARMUP = 215  # candles of history to provide (EMA200 + MACD warmup)
+
         for i, candle in enumerate(candles):
-            slot_result = await self._run_candle(candle)
+            history = candles[max(0, i - WARMUP):i]  # up to 215 prior candles
+            slot_result = await self._run_candle(candle, history=history)
             results.slots.append(slot_result)
 
-            if (i + 1) % 100 == 0:
+            if (i + 1) % 500 == 0:
                 completed_pnl = sum(s.pnl for s in results.slots)
                 logger.info(
-                    f"  {i+1}/{len(candles)} candles processed "
-                    f"| running PnL: ${completed_pnl:+.2f}"
+                    f"  {i+1}/{len(candles)} candles "
+                    f"| PnL: ${completed_pnl:+.2f}"
                 )
 
         results.compute()
@@ -591,13 +609,18 @@ class Backtester:
         )
         return results
 
-    async def _run_candle(self, candle: Candle) -> BacktestSlotResult:
+    async def _run_candle(self, candle: Candle, history: List[Candle] = None) -> BacktestSlotResult:
         """Simulate one 5-minute market slot against a single candle."""
         strategy = self.strategy_class()
 
         # Create a minimal synthetic slot (no network access)
         slot = _SyntheticSlot(candle)
-        api = BacktestStrategyAPI(candle=candle, budget=self.budget_per_slot, slot=slot)
+        api = BacktestStrategyAPI(
+            candle=candle,
+            budget=self.budget_per_slot,
+            slot=slot,
+            history=history or [],
+        )
         slot.api = api
 
         # Run strategy with a tight timeout (no real async waits in backtest)

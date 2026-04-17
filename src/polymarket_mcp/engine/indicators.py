@@ -173,6 +173,80 @@ def bollinger(
     return (middle + std_dev * sigma, middle, middle - std_dev * sigma)
 
 
+# ── EMA series (internal helper) ──────────────────────────────────────────
+
+def ema_series(prices: List[float], period: int) -> Optional[List[float]]:
+    """
+    Full EMA series (oldest → newest).  Used internally by macd().
+
+    Returns a list of length  len(prices) - period + 1, or None if
+    there are not enough prices.
+    """
+    if len(prices) < period:
+        return None
+    k = 2.0 / (period + 1)
+    result = [sum(prices[:period]) / period]
+    for price in prices[period:]:
+        result.append(price * k + result[-1] * (1 - k))
+    return result
+
+
+# ── MACD ───────────────────────────────────────────────────────────────────
+
+def macd(
+    prices: List[float],
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    MACD indicator.
+
+    Args:
+        prices: Closing prices (oldest first)
+        fast, slow, signal: Standard MACD periods (12/26/9)
+
+    Returns:
+        (macd_line, signal_line, histogram) or (None, None, None) if
+        insufficient data.  All three are None together or all three
+        are floats.
+
+    Interpretation:
+        macd_line > signal_line  → bullish momentum
+        macd_line < signal_line  → bearish momentum
+        histogram > 0 and rising → momentum accelerating up
+    """
+    if len(prices) < slow + signal:
+        return None, None, None
+
+    fast_series = ema_series(prices, fast)
+    slow_series = ema_series(prices, slow)
+    if fast_series is None or slow_series is None:
+        return None, None, None
+
+    # Align both series to the same ending index (prices[-1]).
+    # fast_series[i] ↔ prices[fast-1+i], slow_series[j] ↔ prices[slow-1+j]
+    # Both end at prices[-1].  Take the shorter overlap from the right.
+    n = min(len(fast_series), len(slow_series))
+    macd_series = [
+        fast_series[len(fast_series) - n + i] - slow_series[len(slow_series) - n + i]
+        for i in range(n)
+    ]
+
+    if len(macd_series) < signal:
+        return None, None, None
+
+    # Signal line = EMA(signal) of macd_series
+    k_sig = 2.0 / (signal + 1)
+    sig_val = sum(macd_series[:signal]) / signal
+    for v in macd_series[signal:]:
+        sig_val = v * k_sig + sig_val * (1 - k_sig)
+
+    macd_val = macd_series[-1]
+    hist_val = macd_val - sig_val
+    return macd_val, sig_val, hist_val
+
+
 # ── Cross-source divergence ────────────────────────────────────────────────
 
 def divergence_score(price_a: float, price_b: float) -> float:

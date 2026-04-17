@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 LOOKAHEAD_SECONDS = 120
 # How often (seconds) to poll for new upcoming slots
 POLL_INTERVAL = 30
+# Duration of each 5-minute market slot
+SLOT_DURATION_SECONDS = 300
 
 
 class EngineState(str):
@@ -253,11 +255,21 @@ class TradingEngine:
         """
         try:
             # Query Gamma API for active BTC 5-minute markets
-            markets = await self.client.get_markets(
-                tag="BTC",
-                active=True,
-                limit=10,
-            )
+            import httpx
+            async with httpx.AsyncClient(timeout=15.0) as http:
+                resp = await http.get(
+                    "https://gamma-api.polymarket.com/markets",
+                    params={"tag": "Crypto", "active": "true", "closed": "false", "limit": 20},
+                )
+                resp.raise_for_status()
+                raw = resp.json()
+            markets = raw if isinstance(raw, list) else raw.get("data", [])
+            # Filter to BTC-related markets
+            markets = [
+                m for m in markets
+                if "btc" in (m.get("question") or "").lower()
+                or "bitcoin" in (m.get("question") or "").lower()
+            ]
 
             slots = []
             now = datetime.now(timezone.utc)
@@ -272,6 +284,9 @@ class TradingEngine:
                     close_time = datetime.fromisoformat(
                         end_date_str.replace("Z", "+00:00")
                     )
+                    # Ensure timezone-aware
+                    if close_time.tzinfo is None:
+                        close_time = close_time.replace(tzinfo=timezone.utc)
                 except ValueError:
                     continue
 
